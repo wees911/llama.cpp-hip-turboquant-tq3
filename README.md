@@ -22,7 +22,7 @@
   | `-ctk q4_0 -ctv tq3_0 -fa on`              | 238 t/s  | **78.2 t/s** |                                                                                                                                 
   | Default f16 KV cache                       | 159 t/s  | 89.6 t/s   |
                                                                                                                                                                                                            
-  VRAM usage: ~22.7 / 24 GB (full 35B model on GPU).        
+  VRAM usage: ~15 / 24 GB (full 35B model on GPU).        
                                                                                                                                                                                                            
   ### What the patch changes              
                                                                                                                                                                                                            
