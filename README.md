@@ -1,82 +1,113 @@
-## llama.cpp-hip-turboquant                                                                                                                                                                              
-                                                                                                                                                                                                           
-  Arch Linux `PKGBUILD` and minimal patch to build the                                                                                                                                                     
-  [`turbo-tan/llama.cpp-tq3`](https://github.com/turbo-tan/llama.cpp-tq3) fork                                                                                                                             
-  with the HIP/ROCm backend, enabling TurboQuant-quantized models                                                                                                                                          
-  (TQ3_1S, **TQ3_4S**) and TQ3_0 KV cache on AMD GPUs.                                                                                                                                                     
-                                              
-  The upstream fork is CUDA-only — this patch only adds the HIP shims required                                                                                                                             
-  for the GPU kernels. No change to the TurboQuant logic itself.
-                                                                                                                                                                                                           
-  ### Validated on                                          
-                                                                                                                                                                                                           
-  - **GPU**: AMD Radeon RX 7900 XTX (gfx1100)                                                                                                                                                              
-  - **ROCm**: 7.2.0 / HIP 7.2.26043                                                                                                                                                                        
-  - **OS**: Manjaro Linux (kernel 6.19)                                                                                                                                                                    
-  - **Model**: `YTan2000/Qwen3.6-35B-A3B-TQ3_4S` + BF16 mmproj
-                                              
-  ### Measured performance (llama-server, 65k context)                                                                                                                                                     
-                                              
-  | Config                                     | Prompt   | Generation |                                                                                                                                   
-  |--------------------------------------------|----------|------------|
-  | `-ctk q4_0 -ctv tq3_0 -fa on`              | 238 t/s  | **78.2 t/s** |                                                                                                                                 
-  | Default f16 KV cache                       | 159 t/s  | 89.6 t/s   |
-                                                                                                                                                                                                           
-  VRAM usage: ~15 / 24 GB (full 35B model on GPU).        
-                                                                                                                                                                                                           
-  ### What the patch changes              
-                                                                                                                                                                                                           
-  112 lines, 4 files in `ggml/src/ggml-cuda/`:                                                                                                                                                             
-   
-  - `vendors/hip.h` — variadic `__shfl_*_sync` macros (3/4-arg), `__ballot_sync`,                                                                                                                          
-    `cudaEventCreate` / `cudaEventElapsedTime` shims.       
-  - `tq3-native.cuh` — conditional HIP vs CUDA include for `fp16.h` and                                                                                                                                    
-    `GGML_COMMON_DECL_*`.                                   
-  - `tq3-native.cu` — include order (`common.cuh` before `tq3-native.cuh`).                                                                                                                                
-  - `vecdotq.cuh` — replaces 4× `__dp4a` with `ggml_cuda_dp4a` (portable wrapper
-    that maps to `v_dot4c` on RDNA3).                                                                                                                                                                      
-                                                            
-  ### Install                                                                                                                                                                                              
-                                                                                                                                                                                                           
-  ```bash                                                                                                                                                                                                  
-  git clone <this-repo> llama.cpp-hip-turboquant                                                                                                                                                           
-  cd llama.cpp-hip-turboquant                                                                                                                                                                              
-  makepkg -si                                               
-                                              
-  The package conflicts with llama.cpp and llama.cpp-hip (both ship
-  /usr/bin/llama-server). pacman will handle the transition.
-                                                                                                                                                                                                           
-  Limitations                             
-                                                                                                                                                                                                           
-  - GGML_RPC=OFF — the RPC backend is disabled because of a static_assert on                                                                                                                               
-  GGML_OP_COUNT that changed upstream. Patch separately if you need it.
-  - llama-cli: add --no-warmup to avoid a rare kernel that hangs during                                                                                                                                    
-  warmup. llama-server is not affected.                                                                                                                                                                    
-                                          
-  Supported types in this build                                                                                                                                                                            
-                                                                                                                                                                                                           
-  ┌────────┬─────┬─────────────────┐          
-  │  Type  │ ID  │      Role       │                                                                                                                                                                       
-  ├────────┼─────┼─────────────────┤                        
-  │ TQ3_1S │ 44  │ Weights         │                                                                                                                                                                       
-  ├────────┼─────┼─────────────────┤
-  │ TQ3_4S │ 46  │ Weights (4 bpw) │                                                                                                                                                                       
-  ├────────┼─────┼─────────────────┤                        
-  │ TQ3_0  │ 200 │ KV cache        │      
-  └────────┴─────┴─────────────────┘
-                                                                                                                                                                                                           
-  The TURBO2_0 / TURBO3_0 / TURBO4_0 / TQ4_1S variants from the
-  https://github.com/domvox/llama.cpp-turboquant-hip fork are not                                                                                                                                          
-  supported — the two KV cache designs have diverged.       
-                                                                                                                                                                                                           
-  Credits
-                                                                                                                                                                                                           
-  - Upstream TurboQuant (CUDA): https://github.com/turbo-tan/llama.cpp-tq3
-  - Original HIP port (different KV cache design):                                                                                                                                                         
-  https://github.com/domvox/llama.cpp-turboquant-hip        
-  - Base PKGBUILD: llama.cpp-hip by Orion-zhen / txtsd on AUR                                                                                                                                              
-  - Paper: https://arxiv.org/abs/2504.19874   
-                                                                                                                                                                                                           
-  License                                                                                                                                                                                                  
-                                                                                                                                                                                                           
-  MIT (same as upstream llama.cpp).
+# llama.cpp-tq3 — HIP/ROCm patch (RDNA2/3/4)
+
+Patch to build [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)
+with the HIP/ROCm backend on AMD GPUs, enabling TQ3_1S and TQ3_4S weight inference
+with full flash attention support across all decode turns.
+
+Based on [flamme-demon/llama.cpp-hip-turboquant-tq3](https://github.com/flamme-demon/llama.cpp-hip-turboquant-tq3),
+which provided the initial HIP shims validated on gfx1100 (RX 7900 XTX). This patch
+extends that work with flash attention kernel instances for TQ3_1S/TQ3_4S as key
+types, fixing multi-turn inference on AMD GPUs. Validated on gfx1030 (RDNA2).
+
+> **Note:** This patch was developed with the assistance of [Claude](https://claude.ai) (Anthropic)
+> through iterative debugging and code generation.
+>
+> If [flamme-demon/llama.cpp-hip-turboquant-tq3](https://github.com/flamme-demon/llama.cpp-hip-turboquant-tq3)
+> has been updated to include flash attention support for TQ3_1S/TQ3_4S, please check that repository first.
+
+## Problem solved
+
+On AMD GPUs, the upstream fork produces correct output on the first inference turn,
+but subsequent turns generate completely unrelated content (e.g. outputting "assistant"
+or starting a math problem). The root cause is missing `fattn-vec` kernel instances
+for TQ3_1S/TQ3_4S as K types — decode-phase attention silently falls back to a
+broken path, corrupting the KV cache from turn 2 onward.
+
+## Validated on
+
+| Hardware | ROCm | OS |
+|---|---|---|
+| AMD Radeon RX 6000 series (gfx1030) | 7.2.1 | Ubuntu 24.04 |
+
+`-mwavefrontsize32` is enforced automatically for gfx10xx/gfx11xx/gfx12xx targets.
+Other RDNA2/3/4 architectures are expected to work but have not been independently tested.
+
+## Measured performance (gfx1030)
+
+| Model | VRAM | Config | Generation |
+|---|---|---|---|
+| Qwopus3.5-27B-v3-TQ3_4S | 16 GB | `-ctk q4_0 -ctv tq3_0 -fa on -c 16384` | **~22 t/s** |
+| Qwen3.6-35B-A3B-TQ3_4S | 16 GB | `-ctk q4_0 -ctv tq3_0 -fa on -c 16384` | **~60 t/s** |
+
+## What the patch changes
+
+7 files changed, 6 new files added:
+
+| File | Change |
+|---|---|
+| `ggml/src/ggml-cuda/fattn-common.cuh` | Add `vec_dot_fattn_vec_KQ_tq3_1s` and `vec_dot_fattn_vec_KQ_tq3_4s`; register in `get_vec_dot_KQ` |
+| `ggml/src/ggml-cuda/fattn-vec.cuh` | Extend `nthreads_KQ` and `Q_q8_1` conditions to cover TQ3_1S/TQ3_4S as K types |
+| `ggml/src/ggml-cuda/mmq.cuh` | Add `TQ3_4S` tile size to `mmq_get_dp4a_tile_x_sizes` |
+| `ggml/src/ggml-cuda/vendors/hip.h` | Rewrite `__shfl_*_sync` macros for 3/4-arg dispatch; add `__ballot_sync` |
+| `ggml/src/ggml-cuda/template-instances/fattn-vec-instance-tq3_{0,1s,4s}-{f16,q8_0}.cu` | 6 new fattn-vec instance files (K=TQ3_x, V=f16 or q8_0) |
+| `ggml/src/ggml-hip/CMakeLists.txt` | Register new instances; enforce `-mwavefrontsize32` for all HIP TUs on RDNA targets |
+
+### Why these changes
+
+`fattn-vec` dispatches via `get_vec_dot_KQ<type_K>`. The upstream fork only
+registered `TQ3_0` as a valid K type. `TQ3_1S` and `TQ3_4S` hit the
+`static_assert(type_K == -1, "bad type")` fallback, causing decode attention
+to produce garbage values that corrupted the KV cache every turn after the first.
+
+The fix adds proper KQ dot product implementations for both types — matching the
+centroid/scale arithmetic already present in `vecdotq.cuh` — and registers the
+six necessary `(K type, V type)` flash attention instance combinations.
+
+## Apply
+
+```bash
+git clone https://github.com/turbo-tan/llama.cpp-tq3
+cd llama.cpp-tq3
+git apply turboquant-hip-fix.patch
+
+mkdir build && cd build
+cmake .. \
+  -DGGML_HIP=ON \
+  -DAMDGPU_TARGETS=gfx1030 \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build . --parallel $(nproc)
+```
+
+Replace `gfx1030` with your GPU architecture (e.g. `gfx1100` for RX 7000 series).
+
+## Supported types
+
+| Type | Role | Flash attention K |
+|---|---|---|
+| TQ3_0 | Weights / KV cache | ✅ |
+| TQ3_1S | Weights | ✅ (this patch) |
+| TQ3_4S | Weights | ✅ (this patch) |
+
+V side of flash attention supports `f16` (default KV cache) and `q8_0`.
+`tq3_0` is also valid as V type via the existing `dequantize_V_tq3_0` path.
+
+## Recommended server config
+
+```bash
+./build/bin/llama-server \
+  -m /path/to/model-TQ3_4S.gguf \
+  -ngl 99 -c 16384 -np 1 \
+  -ctk q4_0 -ctv tq3_0 -fa on \
+  --no-warmup --jinja \
+  --cache-reuse 256
+```
+
+## Credits
+
+- [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3) — TQ3_1S/TQ3_4S weight quantization and CUDA kernels
+- [flamme-demon/llama.cpp-hip-turboquant-tq3](https://github.com/flamme-demon/llama.cpp-hip-turboquant-tq3) — base HIP port (gfx1100) that this patch extends
+- [Claude](https://claude.ai) (Anthropic) — assisted in debugging and developing this patch
+
+## License
+
+MIT — same as [llama.cpp](https://github.com/ggml-org/llama.cpp)
