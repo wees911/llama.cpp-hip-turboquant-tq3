@@ -1,4 +1,4 @@
-# llama.cpp-tq3 — HIP/ROCm patch (RDNA2/3/4)
+# llama.cpp-tq3 — HIP/ROCm patch (Targeting RDNA2/3/4, Validated on RDNA2)
 
 Patch to build [turbo-tan/llama.cpp-tq3](https://github.com/turbo-tan/llama.cpp-tq3)
 with the HIP/ROCm backend on AMD GPUs, enabling TQ3_1S and TQ3_4S weight inference
